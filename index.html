@@ -446,7 +446,7 @@ label.name{display:flex;align-items:center;gap:10px;font:600 14px var(--f-displa
 </div>
 
 <div id="start" class="screen" dir="rtl" lang="ar">
-  <div id="gameVersion" aria-label="Game version">VERSION 1.31 · v131</div>
+  <div id="gameVersion" aria-label="Game version">VERSION 1.32 · v132</div>
   <div class="menu-wrap">
     <header class="m-top">
       <div class="m-brand">
@@ -571,7 +571,7 @@ label.name{display:flex;align-items:center;gap:10px;font:600 14px var(--f-displa
 </div>
 
 <div id="tip" dir="rtl" lang="ar" hidden></div>
-<div id="perf" aria-hidden="true" dir="ltr"></div><div id="ver" aria-hidden="true" dir="rtl">CreatedBYNigga</div>
+<div id="perf" aria-hidden="true" dir="ltr"></div><div id="ver" aria-hidden="true" dir="rtl">نسخة 99</div>
 
 <script>
 (() => {
@@ -6316,7 +6316,7 @@ function makeStarRoom(isHost, onStatus) {
 /* play by code through a public relay (MQTT over secure WebSocket): no direct link between the two computers at all,
    so it works on mobile data, behind CGNAT and through strict routers. Everyone in a room subscribes to one topic named
    after the code; the broker fans every message out. The room creator's label starts with "a" so it is elected host. */
-const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker-cn.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081'];
+const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt', 'wss://test.mosquitto.org:8081'];
 function loadMqtt() {
   return new Promise((res, rej) => {
     if (window.mqtt && window.mqtt.connect) { res(); return; }
@@ -6348,7 +6348,7 @@ function makeRelayRoom(isHost, code, onStatus) {
       return;
     }
     const others = [...peers.keys()].filter(p => p !== me), best = live.find(k => others.every(p => k.seen.has(p)));
-    if (best) { if (!backed(best)) pub(best, s); } else { const primary = live[0]; if (!backed(primary)) pub(primary, s); }
+    if (best && !backed(best)) pub(best, s); else { const route = live.find(k => !backed(k)); if (route) pub(route, s); }
   };
   const others = () => peers.size - 1;
   put(me, myPres);
@@ -6372,11 +6372,12 @@ function makeRelayRoom(isHost, code, onStatus) {
     c.on('error', () => {});
   }
   const hb = setInterval(() => {
+    // Announce on every connected broker: peers behind different routes can still discover the room.
     send({ f: me, t: 'pres', p: myPres }, true);
     const now = Date.now(); let ch = false; for (const [k, p] of peers) if (k !== me && now - p.at > 9000) { peers.delete(k); for (const q of conns) q.seen.delete(k); ch = true; }
     if (ch) { fire(); if (isHost) onStatus('peers', others()); }
   }, 2500);
-  if (!isHost) setTimeout(() => { if (!seenHost && !dead) onStatus('notfound'); }, 25000);
+  if (!isHost) setTimeout(() => { if (!seenHost && !dead) onStatus('notfound'); }, 30000);
   for (const k of conns) connect(k);
   return {
     emit: async (topic, data) => { send({ f: me, t: 'ev', topic, d: data }); },
@@ -6523,21 +6524,22 @@ async function copyInviteUrl() {
 }
 $('#inviteLink').addEventListener('click', copyInviteUrl);
 function codeMsg(txt, bad) { const el = $('#codeMsg'); el.textContent = txt; el.classList.toggle('bad', !!bad); }
-/* v131: direct WebRTC is the default. The public MQTT network is a manual fallback,
-   never silently switch one player to a different transport than the other. */
+/* v132: public MQTT relay is the default for reliable room discovery across NAT.
+   WebRTC is an optional transport; both participants must choose the same transport. */
 let netCodeAttempt = 0;
-async function startCode(isHost, code, forceRelay = false) {
+async function startCode(isHost, code, forceRelay = true) {
   const attempt = ++netCodeAttempt;
   codeMsg(t('codeLoading'));
   const mode = $('#transportState'), fallback = $('#relayFallback');
-  mode.textContent = forceRelay ? '🟠 MQTT Relay · احتياطي' : '🔵 WebRTC P2P · جارٍ الاتصال المباشر';
+  mode.textContent = forceRelay ? '🟠 MQTT Relay · جارٍ الاتصال بالسيرفر' : '🔵 WebRTC P2P · جارٍ الاتصال المباشر';
   fallback.hidden = false;
-  fallback.onclick = () => { if (confirm('لازم أنت وخويك تختارون الاتصال الاحتياطي معًا، وإلا ما بتشوفون بعض. هل تريد المتابعة؟')) startCode(isHost, code, true); };
+  fallback.textContent = forceRelay ? '🔵 تجربة اتصال WebRTC المباشر' : '🟠 العودة إلى MQTT (الموصى به)';
+  fallback.onclick = () => { if (confirm('لازم الطرفين يستخدمون نفس نوع الاتصال. هل تريد التبديل؟')) startCode(isHost, code, !forceRelay); };
   try { if (forceRelay) await loadMqtt(); else await loadPeerJs(); }
   catch (e) {
     if (attempt !== netCodeAttempt) return;
     mode.textContent = '🔴 فشل تحميل مكتبة الاتصال';
-    codeMsg('تعذر تحميل ' + (forceRelay ? 'MQTT' : 'WebRTC/PeerJS') + '. جرب زر الاتصال الاحتياطي عندكما معًا.', true);
+    codeMsg('تعذر تحميل ' + (forceRelay ? 'MQTT' : 'WebRTC/PeerJS') + '. تحقق من الإنترنت أو جرّب وضع الاتصال الآخر عندكما معًا.', true);
     return;
   }
   if (attempt !== netCodeAttempt) return;
@@ -6553,9 +6555,9 @@ async function startCode(isHost, code, forceRelay = false) {
     else if (k === 'broker') { codeMsg(t('codeBroker')); }
     else if (k === 'incoming') codeMsg(t('codeIncoming', code));
     else if (k === 'icefail') { mode.textContent = '🔴 فشل الاتصال المباشر'; codeMsg('فشل الاتصال المباشر (' + v + '). جربا زر MQTT الاحتياطي معًا.', true); }
-    else if (k === 'notfound') codeMsg(t('codeNotFound'), true);
+    else if (k === 'notfound') { mode.textContent = '🔴 لم يُعثر على الهوست'; codeMsg('ما وصل إعلان غرفة الهوست. تأكد أن الهوست أنشأ الغرفة وينتظر، وأنكما تستخدمان MQTT ونفس الكود.', true); }
     else if (k === 'closed') { mode.textContent = '🔴 انقطع الاتصال'; codeMsg(t('codeClosed'), true); }
-    else if (k === 'error') { mode.textContent = '🔴 مشكلة اتصال'; codeMsg('تعذر الاتصال (' + v + '). جرّبا الاتصال الاحتياطي عندكما معًا.', true); }
+    else if (k === 'error') { mode.textContent = '🔴 مشكلة اتصال'; codeMsg('تعذر الاتصال (' + v + '). تحقق من السماح باتصال WebSocket أو جرب شبكة أخرى.', true); }
   };
   st.room = forceRelay ? makeRelayRoom(isHost, code, onStatus) : makeP2PRoom(isHost, code, onStatus);
   attachRoom(st.room);
